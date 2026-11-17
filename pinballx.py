@@ -29,7 +29,7 @@ from pathlib import Path, PureWindowsPath
 from common.extensions.contract import words
 
 from . import drivemap
-from .listing import files_across
+from .listing import files_across, folders_in
 from .mapping import FLYER_PAGES
 from .source import Note, SourceGame, SourceLibrary, SourceMedia, SourceSystem, failed
 
@@ -65,6 +65,14 @@ SHARED_MEDIA_FOLDERS = (
     "Instruction Cards",
     *(f"Flyer Images/{page}" for page in FLYER_PAGES),
 )
+
+def unlisted_media_folders(media_root: Path | str) -> list[str]:
+    """The folders under a media root that no kind of ours is read from: whatever else a
+    person filed art in, for the importer to ask about rather than leave behind."""
+    named = {one.lower() for one in (*MEDIA_FOLDERS, "Instruction Cards", "Flyer Images")}
+    return [name for name in folders_in(Path(media_root))
+            if name.lower() not in named and not _housekeeping(name)]
+
 
 # The `<game>` children, verbatim from the parser both frontends share. Read as text and
 # mapped where we have somewhere to put it; the rest travels in `extras` so a preview can
@@ -508,8 +516,9 @@ def read_media(media_root: Path | str, games: list[SourceGame],
     order = sorted(folded, key=len, reverse=True)
 
     found: dict[str, list[SourceMedia]] = {game.key: [] for game in games}
+    folders = (*MEDIA_FOLDERS, *unlisted_media_folders(media_root))
     listed = [(folder, files, False) for folder, files in
-              zip(MEDIA_FOLDERS, files_across(media_root, MEDIA_FOLDERS), strict=True)]
+              zip(folders, files_across(media_root, folders), strict=True)]
     listed += [(folder, files, True) for folder, files in
                (read_shared_media(media_root) if shared is None else shared).items()]
     for folder, files, in_shared in listed:

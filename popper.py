@@ -15,6 +15,7 @@ reader using one of the three for all of them finds either no artwork or no tabl
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
@@ -60,10 +61,28 @@ def detect(root: Path | str, survey: Callable[..., dict] | None = None) -> bool:
 
 def _open(path: Path) -> sqlite3.Connection:
     """Read-only, so a live frontend running against this database is not blocked by an
-    importer that only ever converts from it."""
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    db.row_factory = sqlite3.Row
-    return db
+    importer that only ever converts from it.
+
+    Retries with `immutable=1` where the share refuses the read-only open. A database that
+    is locked is raised as it is.
+    """
+    refused: sqlite3.Error | None = None
+    for mode in ("mode=ro", "immutable=1"):
+        db = sqlite3.connect(f"file:{path}?{mode}", uri=True)
+        try:
+            db.execute("select 1 from sqlite_master limit 1")
+        except sqlite3.OperationalError as exc:
+            db.close()
+            refused = refused or exc
+            if "locked" in str(exc).lower():
+                break
+            continue
+        except sqlite3.DatabaseError:
+            # Not a database: the read that follows says so, as it always has.
+            pass
+        db.row_factory = sqlite3.Row
+        return db
+    raise refused  # type: ignore[misc]
 
 
 def _text(row: sqlite3.Row, column: str) -> str:
@@ -205,6 +224,24 @@ def _when(value: Any) -> int | None:
     return None
 
 
+def _media_folders(media_root: Path) -> list[tuple[str, str]]:
+    """(kind, folder name on disk) for each folder under the emulator's media directory.
+
+    A name is matched to Popper's own ignoring case: a share can hold `playfield` where
+    Popper wrote `PlayField`.
+    """
+    known = {name.lower(): name for name in MEDIA_FOLDERS}
+    skip = {name.lower() for name in NOT_MEDIA}
+    try:
+        with os.scandir(media_root) as entries:
+            on_disk = sorted(entry.name for entry in entries
+                             if entry.is_dir() and not entry.name.startswith("."))
+    except OSError:
+        return []
+    return [(known.get(name.lower(), name), name) for name in on_disk
+            if name.lower() not in skip]
+
+
 def read_media(media_root: Path | str, games: list[SourceGame]) -> list[SourceGame]:
     """Attach each game's artwork.
 
@@ -216,8 +253,10 @@ def read_media(media_root: Path | str, games: list[SourceGame]) -> list[SourceGa
     folded = {game.key.lower(): game.key for game in games if game.key}
     found: dict[str, list[SourceMedia]] = {game.key: [] for game in games}
 
-    for folder, files in zip(MEDIA_FOLDERS, files_across(media_root, MEDIA_FOLDERS),
-                             strict=True):
+    folders = _media_folders(media_root)
+    for (kind, _name), files in zip(
+            folders, files_across(media_root, [name for _kind, name in folders]),
+            strict=True):
         for filename, path in files:
             if filename in NOT_MEDIA:
                 continue
@@ -225,10 +264,50 @@ def read_media(media_root: Path | str, games: list[SourceGame]) -> list[SourceGa
             owner = max((key for key in folded if stem.startswith(key)),
                         key=len, default=None)
             if owner is not None:
-                found[folded[owner]].append(SourceMedia(source_kind=folder, path=path))
+                found[folded[owner]].append(SourceMedia(source_kind=kind, path=path))
 
     return [SourceGame(**{**vars(game), "media": tuple(found.get(game.key, ()))})
             for game in games]
+
+
+def _holds_media(folder: Path) -> bool:
+    """Whether a folder is an emulator's media directory: it has one of Popper's folders."""
+    known = {name.lower() for name in MEDIA_FOLDERS}
+    return any(name.lower() in known for _kind, name in _media_folders(folder))
+
+
+def media_folder(emulator: str, recorded: str, root: Path, chosen: str = "") -> Path:
+    """Where an emulator's media is, in this order: the folder somebody pointed the wizard
+    at (a POPMedia folder holding one folder per emulator gives that emulator's, any other
+    is used as it is), the path Popper recorded where Popper's media folders are in it,
+    then POPMedia beside the database.
+    """
+    if chosen:
+        pointed = Path(chosen)
+        inside = next((name for _kind, name in _media_folders(pointed)
+                       if name.lower() == emulator.lower()), "")
+        if inside:
+            return pointed / inside
+        return _beside(pointed, emulator) or pointed
+    if recorded:
+        found = drivemap.resolve(recorded, root)
+        if found.path and _holds_media(Path(found.path)):
+            return Path(found.path)
+    return root / MEDIA_DIR / emulator
+
+
+def _beside(pointed: Path, emulator: str) -> Path | None:
+    """The emulator's own folder next to the one pointed at, when the wizard was handed
+    one emulator's folder and the library has several. Only a folder that holds media
+    counts, so a library with one emulator keeps the folder it was pointed at."""
+    try:
+        for entry in sorted(pointed.parent.iterdir()):
+            if (entry.name.lower() == emulator.lower() and entry != pointed
+                    and entry.is_dir() and _holds_media(entry)):
+                return entry
+    except OSError:
+        pass
+    return None
 
 
 def _playable(said: str, plays: Callable[[str], bool] | None) -> bool:
@@ -250,9 +329,9 @@ def read(root: Path | str, plays: Callable[[str], bool] | None = None,
          chosen: dict | None = None) -> SourceLibrary:
     """Every emulator the database declares, and the games under each.
 
-    The media root is derived from where the database actually is rather than read off
-    the row: what an install records is the path on the machine it ran on, and a library
-    reached over a share is never at that path.
+    Paths an install records are the ones on the machine it ran on, and a library reached
+    over a share is never there, so each is found again the way the table folder is, and
+    the media folder falls back to POPMedia beside the database.
 
     Every argument after `root` is accepted so every reader is called the same way. This
     one does not filter on `plays` yet: it reads one system, and what to do when that
@@ -277,8 +356,7 @@ def read(root: Path | str, plays: Callable[[str], bool] | None = None,
 
     try:
         emulators = list(db.execute(
-            "select EMUID, EmuName, DirGames, DirRoms, Visible, GamesExt "
-            "from Emulators order by EMUID"))
+            "select * from Emulators order by EMUID"))
         skipped_systems = []
         for emu in emulators:
             name = _text(emu, "EmuName")
@@ -310,7 +388,9 @@ def read(root: Path | str, plays: Callable[[str], bool] | None = None,
             skipped = len(rows) - len(games)
             if skipped:
                 notes.append(t("note.rows_unnamed", system=name, count=skipped))
-            games = read_media(root / MEDIA_DIR / name, games)
+            games = read_media(
+                media_folder(name, _text(emu, "DirMedia"), root,
+                             (chosen or {}).get("media", "")), games)
             systems.append(SourceSystem(
                 name=name, games=tuple(games), tables_dir=tables_dir,
                 working_path=drivemap.resolve(_text(emu, "DirRoms"), root).path

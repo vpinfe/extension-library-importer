@@ -41,7 +41,8 @@ class PopperCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
 
-    def _library(self, emulators, games) -> Path:
+    def _library(self, emulators, games, media=None) -> Path:
+        """`media` maps an EMUID to the `DirMedia` Popper recorded for it."""
         db = sqlite3.connect(self.root / popper.DATABASE)
         db.execute(f"create table Emulators ({EMULATORS})")
         db.execute(f"create table Games ({GAMES})")
@@ -52,6 +53,8 @@ class PopperCase(unittest.TestCase):
             "insert into Games (GameID, EMUID, GameName, GameFileName, GameDisplay, "
             "Visible, GameYear, ROM, Manufact) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             games)
+        for emuid, recorded in (media or {}).items():
+            db.execute("update Emulators set DirMedia = ? where EMUID = ?", (recorded, emuid))
         db.commit()
         db.close()
         return self.root
@@ -293,6 +296,140 @@ class StatsTests(PopperCase):
         self.assertEqual(next(one.path for one in made.sources if one.key == "history"),
                          str(path))
         self.assertEqual(plan_for.expected(made)["history"], 2)
+
+
+class MediaFolderTests(PopperCase):
+    """Where an emulator's artwork is looked for, and which folders are read."""
+
+    EMU = [(1, "Visual Pinball X", "", "", 1, "vpx")]
+    GAME = [(1, 1, "Taxi", "Taxi.vpx", "Taxi", 1, "", "", "")]
+
+    def _art(self, *parts: str, name: str = "Taxi.png") -> Path:
+        folder = self.root.joinpath(*parts)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(b"x")
+        return folder / name
+
+    def _kinds(self, root, **given):
+        return [(one.source_kind, Path(one.path)) for one in
+                popper.read(root, **given).games[0].media]
+
+    def test_artwork_in_popmedia_beside_the_database_is_read(self) -> None:
+        art = self._art("POPMedia", "Visual Pinball X", "BackGlass")
+
+        self.assertEqual(self._kinds(self._library(self.EMU, self.GAME)),
+                         [("BackGlass", art)])
+
+    def test_the_folder_popper_recorded_is_read_where_it_is_not_popmedia(self) -> None:
+        art = self._art("Media", "VPX", "PlayField")
+
+        root = self._library(self.EMU, self.GAME, media={1: r"D:\Pinball\Media\VPX"})
+
+        self.assertEqual(self._kinds(root), [("PlayField", art)])
+
+    def test_a_recorded_folder_with_none_of_poppers_folders_is_not_believed(self) -> None:
+        """A short tail can match an unrelated folder of the same name. The emulator's
+        own is still found beside the database."""
+        self._art("Media", "VPX", name="notes.txt")
+        art = self._art("POPMedia", "Visual Pinball X", "Wheel")
+
+        root = self._library(self.EMU, self.GAME, media={1: r"D:\Pinball\Media\VPX"})
+
+        self.assertEqual(self._kinds(root), [("Wheel", art)])
+
+    def test_the_folder_somebody_chose_comes_first(self) -> None:
+        self._art("POPMedia", "Visual Pinball X", "BackGlass")
+        chosen = self._art("Elsewhere", "Topper")
+
+        root = self._library(self.EMU, self.GAME)
+
+        self.assertEqual(self._kinds(root, chosen={"media": str(self.root / "Elsewhere")}),
+                         [("Topper", chosen)])
+
+    def test_a_chosen_popmedia_gives_the_emulators_own_folder(self) -> None:
+        self._art("Chosen", "Future Pinball", "BackGlass")
+        art = self._art("Chosen", "Visual Pinball X", "BackGlass")
+
+        root = self._library(self.EMU, self.GAME)
+
+        self.assertEqual(self._kinds(root, chosen={"media": str(self.root / "Chosen")}),
+                         [("BackGlass", art)])
+
+    def test_a_folder_chosen_for_one_emulator_does_not_serve_the_others(self) -> None:
+        """The wizard hands back the folder it guessed, which is the first emulator's."""
+        first = self._art("POPMedia", "Visual Pinball X", "BackGlass")
+        second = self._art("POPMedia", "VPX Two", "Topper")
+        root = self._library(
+            [(1, "Visual Pinball X", "", "", 1, "vpx"), (2, "VPX Two", "", "", 1, "vpx")],
+            [(1, 1, "Taxi", "Taxi.vpx", "Taxi", 1, "", "", ""),
+             (2, 2, "Taxi", "Taxi.vpx", "Taxi", 1, "", "", "")])
+
+        library = popper.read(root, chosen={"media": str(first.parent.parent)})
+
+        found = {one.name: [(m.source_kind, Path(m.path)) for m in one.games[0].media]
+                 for one in library.systems}
+        self.assertEqual(found, {"Visual Pinball X": [("BackGlass", first)],
+                                 "VPX Two": [("Topper", second)]})
+
+    def test_a_folder_popper_does_not_list_is_still_read_so_it_can_be_named(self) -> None:
+        art = self._art("POPMedia", "Visual Pinball X", "Flyers")
+
+        self.assertEqual(self._kinds(self._library(self.EMU, self.GAME)),
+                         [("Flyers", art)])
+
+    def test_a_folder_in_another_case_is_read_as_poppers_own(self) -> None:
+        art = self._art("POPMedia", "Visual Pinball X", "playfield")
+
+        self.assertEqual(self._kinds(self._library(self.EMU, self.GAME)),
+                         [("PlayField", art)])
+
+    def test_the_thumbnail_folders_are_not_artwork(self) -> None:
+        self._art("POPMedia", "Visual Pinball X", "pthumbs")
+        self._art("POPMedia", "Visual Pinball X", "vsthumbs")
+
+        self.assertEqual(self._kinds(self._library(self.EMU, self.GAME)), [])
+
+
+class RefusedLockTests(PopperCase):
+    """A database on a network share answers "access permission denied" to a read-only
+    open, because the share will not give SQLite the lock it asks for."""
+
+    def test_a_share_that_refuses_the_lock_is_read_without_one(self) -> None:
+        root = self._library([(1, "Visual Pinball X", "", "", 1, "vpx")],
+                             [(1, 1, "Taxi", "Taxi.vpx", "Taxi", 1, "", "", "")])
+        real = sqlite3.connect
+        asked: list[str] = []
+
+        def share(target, *args, **kwargs):
+            asked.append(target)
+            if "mode=ro" in target:
+                return _Refusing()
+            return real(target, *args, **kwargs)
+
+        with mock.patch.object(popper.sqlite3, "connect", share):
+            library = popper.read(root)
+
+        self.assertEqual(len(library.games), 1)
+        self.assertEqual(library.notes, ())
+        self.assertTrue(any("immutable=1" in target for target in asked))
+
+    def test_a_database_nothing_can_open_is_still_reported(self) -> None:
+        (self.root / popper.DATABASE).write_bytes(b"not a database" * 40)
+
+        library = popper.read(self.root)
+
+        self.assertEqual(library.games, ())
+        self.assertEqual(len(library.notes), 1)
+
+
+class _Refusing:
+    """What the share hands back for a read-only open: a connection that fails on use."""
+
+    def execute(self, *args, **kwargs):
+        raise sqlite3.OperationalError("access permission denied")
+
+    def close(self) -> None:
+        pass
 
 
 if __name__ == "__main__":

@@ -661,6 +661,62 @@ class NamesArtAndThingsTests(WizardCase):
             one.write_bytes(data)
         return source
 
+    def with_folder_of_cards(self) -> Path:
+        """A copy of the fixture with a folder of art PinballX has no kind for."""
+        source = self.root / "with cards"
+        shutil.copytree(FIXTURE, source)
+        cards = source / "Media" / "Visual Pinball X" / "Cards"
+        cards.mkdir()
+        (cards / "Taxi.png").write_bytes(b"a card")
+        return source
+
+    def _leftover(self, page: dict) -> dict:
+        return next(one for one in page["fields"] if "leftover_0" in one["key"])
+
+    def test_a_folder_with_no_kind_is_asked_about_and_defaults_to_kept(self) -> None:
+        page = self.page("media", source=self.with_folder_of_cards())
+
+        field = self._leftover(page)
+        self.assertEqual(field["label"], "Cards Files")
+        self.assertEqual(field["value"], "keep")
+        ids = [one[0] for one in field["choices"]]
+        self.assertEqual((ids[0], ids[-1]), ("keep", "skip"))
+        self.assertIn("as:topper", ids)
+
+    def test_no_such_question_is_asked_of_a_library_without_one(self) -> None:
+        page = self.page("media")
+
+        self.assertFalse([one for one in page["fields"] if "leftover" in one["key"]])
+
+    def test_what_was_said_of_such_a_folder_is_on_the_summary_and_not_under_not_imported(
+            self) -> None:
+        source = self.with_folder_of_cards()
+        page = self.page("media", source=source)
+        key = self._leftover(page)["key"]
+
+        kept = self.walk(source=source)[-1]["summary"]
+        left = self.walk(source=source, **{key: "skip"})[-1]["summary"]
+        made = self.walk(source=source, **{key: "as:topper"})[-1]["summary"]
+
+        def other(summary: list) -> str:
+            return next(row[1] for row in summary if row[0] == "Other Media")
+
+        self.assertEqual(other(kept), "Cards, kept with each table")
+        self.assertEqual(other(left), "Cards, left behind")
+        self.assertEqual(other(made), "Cards, as Topper")
+        for summary in (kept, left, made):
+            self.assertFalse([row for row in summary if row[0] == "Files Not Imported"
+                              and "Cards" in str(row[1])])
+
+    def test_a_choice_the_folders_files_cannot_be_imported_as_is_kept(self) -> None:
+        source = self.with_folder_of_cards()
+        key = self._leftover(self.page("media", source=source))["key"]
+
+        summary = self.walk(source=source, **{key: "as:audio"})[-1]["summary"]
+
+        self.assertEqual(next(row[1] for row in summary if row[0] == "Other Media"),
+                         "Cards, kept with each table")
+
     def test_the_names_page_shows_what_a_folder_would_be_called(self) -> None:
         page = self.page("names")
 

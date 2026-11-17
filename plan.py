@@ -445,6 +445,7 @@ def bytes_to_copy(games: list[SourceGame], source_id: str, kinds: tuple[str, ...
                        for name in _beside(companions_of, game.table_file)]
         wanted += [Path(path) for _kind, path
                    in mapping.media_for(source_id, game, kinds, wheels_as)]
+        wanted += [Path(path) for _folder, path in mapping.kept_for(game)]
         rom = (roms or {}).get(game.table_file, "") if game.table_file else ""
         rom = (real(rom) if real and rom else "") or rom
         found = finding.rom_file(roms_dir, rom) if rom and roms_dir else None

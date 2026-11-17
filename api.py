@@ -307,23 +307,39 @@ def build(ctx: Any) -> None:
              fresh: bool = False, keep: bool = True) -> SourceLibrary:
         """The source, read once for the steps of one import.
 
-        Only the Folders reader looks at what was chosen, so only for that one does the
-        answer to a step change what was read. `fresh` reads again whatever is held.
+        The Folders reader looks at everything that was chosen, and the Popper reader at
+        the media folder alone, so for those the answer to a step changes what was read.
+        `fresh` reads again whatever is held.
         """
+        held_choice = _chosen(values) or {}
+        if reader is popper:
+            held_choice = {"media": held_choice.get("media", "")}
         key = (reader.SOURCE_ID, str(path),
-               json.dumps(_chosen(values), sort_keys=True, default=str)
-               if reader is folders else "")
+               json.dumps(held_choice, sort_keys=True, default=str)
+               if reader in (folders, popper) else "")
         if fresh:
             shaped.clear()
         found = held.library_for(key, fresh) if keep else None
-        if found is not None:
-            return found
-        progress.stage("reading", ctx.t("progress.reading", source=_name(ctx, reader)))
-        library = reader.read(path, ctx.apps.plays, ctx.apps.names(),
-                              survey=survey, chosen=_chosen(values))
-        if keep:
-            held.keep(key, library)
-        return library
+        if found is None:
+            progress.stage("reading", ctx.t("progress.reading", source=_name(ctx, reader)))
+            found = reader.read(path, ctx.apps.plays, ctx.apps.names(),
+                                survey=survey, chosen=_chosen(values))
+            if keep:
+                held.keep(key, found)
+        return mapping.with_leftovers(found, leftover_answers(found, values))
+
+    def leftover_answers(library: SourceLibrary, values: dict) -> dict[str, str]:
+        """What was answered for each folder with no kind of ours, by folder. An answer the
+        folder's files cannot be imported as counts for nothing, and the folder is kept."""
+        found = mapping.leftovers(library.source_id, library.games)
+        answered = {}
+        for index, (folder, paths) in enumerate(found.items()):
+            said = str(values.get(answer_key(f"leftover_{index}")) or "")
+            if said in (mapping.KEEP, mapping.SKIP) or (
+                    said.startswith(mapping.AS)
+                    and said[len(mapping.AS):] in mapping.kinds_for(paths, ctx.games.kinds())):
+                answered[folder] = said
+        return answered
 
     def look_beside(library: SourceLibrary) -> None:
         """Ask core what sits beside every game file not yet asked about, in one call.
@@ -996,9 +1012,26 @@ def build(ctx: Any) -> None:
             return None
         makers = logos.candidates(media.path)
         pictures = sum(len(one.kinds) for one in (*made.making, *made.filling))
-        if not (pictures or makers):
+        leftovers = mapping.leftovers(library.source_id, library.games)
+        if not (pictures or makers or leftovers):
             return None
-        return {"images": wheel_files(library, answers(values)), "makers": len(makers)}
+        return {"images": wheel_files(library, answers(values)), "makers": len(makers),
+                "leftovers": leftovers}
+
+    def _leftover_field(library: SourceLibrary, index: int, folder: str, paths: list[str],
+                        values: dict) -> dict[str, Any]:
+        """What to do with the files of one folder that has no kind of ours: keep them with
+        their tables, import them as a kind they could be, or leave them."""
+        choices = [[mapping.KEEP, ctx.t("wizard.media.leftover.keep")]]
+        choices += [[f"{mapping.AS}{kind}",
+                     ctx.t("wizard.media.leftover.as", name=ctx.t(f"media.kind.{kind}"))]
+                    for kind in mapping.kinds_for(paths, ctx.games.kinds())]
+        choices.append([mapping.SKIP, ctx.t("wizard.media.leftover.skip")])
+        chosen = leftover_answers(library, values).get(folder, mapping.KEEP)
+        return {"key": answer_key(f"leftover_{index}"), "type": "select",
+                "label": ctx.t("wizard.media.leftover.label", folder=folder),
+                "value": chosen, "choices": choices,
+                "help": ctx.t("wizard.media.leftover.help", count=len(paths))}
 
     def _media_step(reader: ModuleType, library: SourceLibrary, made: Plan, values: dict,
                     media: dict[str, Any]) -> dict:
@@ -1031,6 +1064,8 @@ def build(ctx: Any) -> None:
                      option(mapping.LOGOS, ctx.t("wizard.media.logos"),
                             ctx.t("wizard.media.logos.help")),
                      option(mapping.WHEELS, ctx.t("wizard.media.wheels"), "")]})
+        for index, (folder, paths) in enumerate(media["leftovers"].items()):
+            fields.append(_leftover_field(library, index, folder, paths, values))
         fields.append({"key": "fetch_media", "type": "switch",
                        "label": ctx.t("wizard.media.fetch.label"),
                        "value": _on(said, "fetch_media"),
@@ -1225,6 +1260,14 @@ def build(ctx: Any) -> None:
             return ctx.t(f"kind.{source.key}.not_found")
         return ctx.t("wizard.summary.not_imported")
 
+    def _leftover_said(folder: str, said: str) -> str:
+        if said == mapping.SKIP:
+            return ctx.t("wizard.summary.leftover_skip", folder=folder)
+        if said.startswith(mapping.AS):
+            return ctx.t("wizard.summary.leftover_as", folder=folder,
+                         name=ctx.t(f"media.kind.{said[len(mapping.AS):]}"))
+        return ctx.t("wizard.summary.leftover_keep", folder=folder)
+
     def _summary_step(reader: ModuleType, library: SourceLibrary, made: Plan,
                       values: dict, games: list[SourceGame]) -> dict:
         """Everything the previous steps decided, and what it comes to."""
@@ -1293,6 +1336,13 @@ def build(ctx: Any) -> None:
                 rows.append([ctx.t("wizard.summary.left_behind"),
                              ", ".join(_left_behind(folder, why, count)
                                        for (folder, why), count in left.items())])
+
+        decided = leftover_answers(library, values)
+        said_of = {folder: decided.get(folder, mapping.KEEP)
+                   for folder in mapping.leftovers(library.source_id, games)}
+        if said_of:
+            rows.append([ctx.t("wizard.summary.leftovers"), ", ".join(
+                _leftover_said(folder, said) for folder, said in said_of.items())])
 
         ready = bool(games) or mode == "as_is"
         reason = short or ("" if ready else ctx.t("reason.nothing_left"))

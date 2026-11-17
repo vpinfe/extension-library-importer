@@ -56,6 +56,7 @@ class AdoptedRow(TypedDict):
     rom: NotRequired[str]
     rom_there: NotRequired[bool]
     wheel: NotRequired[bool]
+    kept: NotRequired[int]
 
 
 @dataclass(frozen=True)
@@ -350,12 +351,75 @@ def _place_media(ctx: Any, game_id: str, source_id: str, game: SourceGame,
         except FileExistsError:
             stopped.add(kind)
             row["wheel"] = row.get("wheel", False) or kind in mapping.WHEELS_AS
+        except ValueError as exc:
+            if _kept_as_arrived(ctx, game_id, kind, path, stem, replace, row,
+                                placed.get(kind, 0) + 1):
+                placed[kind] = placed.get(kind, 0) + 1
+            else:
+                ctx.logger.warning("%s: %s was not imported: %s", row["name"], kind, exc)
+                refused.add(mapping.folder_of(game, path))
         except Exception as exc:
             ctx.logger.warning("%s: %s was not imported: %s", row["name"], kind, exc)
             refused.add(mapping.folder_of(game, path))
+    _keep_beside(ctx, game_id, game, stem, replace, row, refused)
     row["skipped_media"] = sorted(
         {*mapping.unmapped_kinds(source_id, game, kinds, wheels_as), *refused} - {""})
     row["refused"].extend(sorted(refused - {""} - set(row["refused"])))
+
+
+def _kept_as_arrived(ctx: Any, game_id: str, kind: str, path: str, stem: str, replace: bool,
+                     row: AdoptedRow, page: int = 1) -> bool:
+    """A file its kind cannot play, such as an `.avi` for a video, put beside the table
+    under the name the kind would give it, where the converter can read it. It fills no
+    slot, but it is a file the report counted on, so it is counted. False where the file is
+    not one the converter reads; a name already taken counts as kept, and is left alone."""
+    try:
+        ctx.games.put_media(game_id, kind, path, stem, replace=replace, page=page,
+                            unsupported=True)
+    except FileExistsError:
+        return True
+    except Exception:
+        return False
+    row["media"] += 1
+    row["kept"] = row.get("kept", 0) + 1
+    return True
+
+
+def _keep_beside(ctx: Any, game_id: str, game: SourceGame, stem: str, replace: bool,
+                 row: AdoptedRow, refused: set[str]) -> None:
+    """The files of folders with no kind of ours that were kept, each under its folder's
+    name. A later file of one folder and type is the next page; a name already taken stops
+    that folder for the game unless the table is being replaced. A folder whose name is
+    empty as a label, or is one a kind owns, is kept under `Other` before it."""
+    pages: dict[tuple[str, str], int] = {}
+    stopped: set[tuple[str, str]] = set()
+    labels: dict[str, str] = {}
+    for folder, path in mapping.kept_for(game):
+        key = (folder, Path(path).suffix.lower())
+        if key in stopped:
+            continue
+        label = mapping.label_of(folder)
+        tries = (labels[folder],) if folder in labels else (label, f"Other{label}")
+        failure: Exception | None = None
+        for attempt in tries:
+            try:
+                ctx.games.put_other_media(game_id, attempt, path, stem, replace=replace,
+                                          page=pages.get(key, 0) + 1)
+            except FileExistsError:
+                stopped.add(key)
+                failure = None
+                break
+            except Exception as exc:
+                failure = exc
+                continue
+            labels[folder] = attempt
+            pages[key] = pages.get(key, 0) + 1
+            row["kept"] = row.get("kept", 0) + 1
+            failure = None
+            break
+        if failure is not None:
+            ctx.logger.warning("%s: %s was not kept: %s", row["name"], Path(path).name, failure)
+            refused.add(folder)
 
 
 def _kept(details: dict, mode: str, chosen: tuple[str, ...],

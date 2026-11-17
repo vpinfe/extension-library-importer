@@ -7,6 +7,7 @@ title rule is the one that is a judgement rather than a lookup.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from common.extensions import host
 
@@ -307,6 +308,91 @@ class MediaTests(unittest.TestCase):
         game = self._with("Table Images")
 
         self.assertEqual(mapping.media_for("emulationstation", game, KINDS), [])
+
+
+class LeftoverTests(unittest.TestCase):
+    """A folder a source filed art in that we have no kind for."""
+
+    def _library(self, *media: SourceMedia, source_id: str = "popper"):
+        from vpinfe_ext_library_importer.source import SourceLibrary, SourceSystem
+
+        game = SourceGame(key="Taxi", media=media)
+        return SourceLibrary(source_id=source_id, root="/r",
+                             systems=(SourceSystem(name="VPX", games=(game,)),))
+
+    def test_each_folder_with_no_kind_is_named_with_its_files_in_order(self) -> None:
+        library = self._library(SourceMedia("Other2", "/m/b.png"),
+                                SourceMedia("Other1", "/m/a.png"),
+                                SourceMedia("Other1", "/m/c.png"))
+
+        found = mapping.leftovers(library.source_id, library.games)
+
+        self.assertEqual(found, {"Other1": ["/m/a.png", "/m/c.png"], "Other2": ["/m/b.png"]})
+
+    def test_a_folder_that_has_a_kind_is_not_one(self) -> None:
+        library = self._library(SourceMedia("GameInfo", "/m/a.png"))
+
+        self.assertEqual(mapping.leftovers(library.source_id, library.games), {})
+
+    def test_nothing_said_keeps_a_folder_with_its_tables(self) -> None:
+        library = mapping.with_leftovers(self._library(SourceMedia("Other1", "/m/a.png")), {})
+
+        self.assertEqual(mapping.kept_for(library.games[0]), [("Other1", "/m/a.png")])
+
+    def test_a_folder_chosen_as_a_kind_is_placed_as_that_kind(self) -> None:
+        library = mapping.with_leftovers(self._library(SourceMedia("Other1", "/m/Taxi.png")),
+                                         {"Other1": "as:topper"})
+
+        self.assertEqual(mapping.media_for("popper", library.games[0], (*KINDS, "topper")),
+                         [("topper", "/m/Taxi.png")])
+        self.assertEqual(mapping.kept_for(library.games[0]), [])
+
+    def test_a_folder_chosen_to_leave_is_neither_placed_kept_nor_counted_as_left(self) -> None:
+        library = mapping.with_leftovers(self._library(SourceMedia("Other1", "/m/Taxi.png")),
+                                         {"Other1": "skip"})
+        game = library.games[0]
+
+        self.assertEqual(mapping.media_for("popper", game, KINDS), [])
+        self.assertEqual(mapping.kept_for(game), [])
+        self.assertEqual(mapping.unmapped_kinds("popper", game, KINDS), [])
+        self.assertEqual(mapping.left_behind("popper", list(library.games), KINDS), {})
+
+    def test_a_kept_folder_is_not_reported_as_left_behind(self) -> None:
+        library = mapping.with_leftovers(self._library(SourceMedia("Other1", "/m/Taxi.png")), {})
+
+        self.assertEqual(mapping.left_behind("popper", list(library.games), KINDS), {})
+
+    def test_a_folder_with_a_kind_is_left_as_it_was(self) -> None:
+        before = self._library(SourceMedia("GameInfo", "/m/a.png"))
+
+        self.assertEqual(mapping.with_leftovers(before, {}), before)
+
+    def test_only_what_a_folders_files_could_be_is_offered(self) -> None:
+        self.assertIn("topper", mapping.kinds_for(["/m/a.png"], tuple(mapping.PICTURE_KINDS)))
+        self.assertNotIn("audio", mapping.kinds_for(["/m/a.png"], ("topper", "audio")))
+        self.assertEqual(mapping.kinds_for(["/m/a.mp3"], ("topper", "audio")), ("audio",))
+        self.assertEqual(mapping.kinds_for(["/m/a.pdf"], ("topper", "audio")), ())
+
+    def test_loading_is_offered_for_video_and_never_for_pictures(self) -> None:
+        kinds = tuple(mapping.PICTURE_KINDS + mapping.VIDEO_KINDS)
+
+        self.assertIn("loading", mapping.kinds_for(["/m/a.mp4"], kinds))
+        self.assertNotIn("loading", mapping.kinds_for(["/m/a.png"], kinds))
+
+    def test_kept_files_come_in_page_order_however_the_folder_was_listed(self) -> None:
+        def kept(*names: str) -> list[str]:
+            game = SourceGame(key="Doom", media=tuple(
+                SourceMedia("Other1", f"/m/{name}", chosen=mapping.KEEP) for name in names))
+            return [Path(path).name for _folder, path in mapping.kept_for(game)]
+
+        self.assertEqual(kept("Doom 2.png", "Doom.png"), ["Doom.png", "Doom 2.png"])
+        self.assertEqual(kept("Doom.png", "Doom 2.png"), ["Doom.png", "Doom 2.png"])
+
+    def test_a_folders_name_becomes_one_word_of_letters_and_digits(self) -> None:
+        self.assertEqual(mapping.label_of("Instruction Cards"), "InstructionCards")
+        self.assertEqual(mapping.label_of("Other1"), "Other1")
+        self.assertEqual(mapping.label_of("DMD plus"), "DMDPlus")
+        self.assertEqual(mapping.label_of("---"), "")
 
 
 class KindWordsTests(unittest.TestCase):

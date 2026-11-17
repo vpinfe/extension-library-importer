@@ -10,11 +10,13 @@ kind does not leave a stale list behind here.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import unicodedata
+from collections.abc import Iterable
 from pathlib import Path
 
-from .source import SourceGame, SourceMedia
+from .source import SourceGame, SourceLibrary, SourceMedia
 
 REPLACEMENT = "�"
 
@@ -100,6 +102,19 @@ WHEELS = "wheel"
 LOGOS = "logo"
 WHEELS_AS = (WHEELS, LOGOS)
 
+# What can be done with a folder that has no kind of ours. A kind is chosen as `as:<kind>`.
+KEEP = "keep"
+SKIP = "skip"
+AS = "as:"
+_NO_KIND = (KEEP, SKIP)
+PICTURE_KINDS = ("playfield", "backglass", "scoreview", "full_dmd", "topper", "wheel",
+                 "flyer", "instruction_card")
+VIDEO_KINDS = ("playfield_video", "backglass_video", "scoreview_video", "topper_video",
+               "full_dmd_video", "loading")
+SOUND_KINDS = ("audio", "audio_launch")
+PICTURE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".apng"})
+SOUND_SUFFIXES = frozenset({".mp3", ".ogg", ".wav", ".flac", ".m4a", ".aac", ".wma"})
+
 
 def media_for(source_id: str, game: SourceGame, known: tuple[str, ...],
               wheels_as: str = WHEELS) -> list[tuple[str, str]]:
@@ -117,7 +132,10 @@ def held_back(source_id: str, game: SourceGame, known: tuple[str, ...],
 
 
 def _kind_of(source_id: str, item: SourceMedia, wheels_as: str, holds_logos: bool) -> str:
-    """Wheel images stay wheels where the game has logos of its own."""
+    """Wheel images stay wheels where the game has logos of its own. A folder with no kind
+    of ours that was chosen as one is that kind."""
+    if item.chosen and item.chosen not in _NO_KIND:
+        return item.chosen
     kind = KINDS_BY_SOURCE.get(source_id, {}).get(item.source_kind, "")
     return LOGOS if kind == WHEELS and wheels_as == LOGOS and not holds_logos else kind
 
@@ -223,8 +241,9 @@ def unmapped_kinds(source_id: str, game: SourceGame, known: tuple[str, ...],
     """What the source held that we have nowhere to put, so it can be said out loud."""
     holds_logos = _holds_logos(source_id, game)
     return sorted({item.source_kind for item in game.media
-                   if _moving_form(_kind_of(source_id, item, wheels_as, holds_logos),
-                                   item.path) not in known})
+                   if item.chosen not in _NO_KIND
+                   and _moving_form(_kind_of(source_id, item, wheels_as, holds_logos),
+                                    item.path) not in known})
 
 
 def left_behind(source_id: str, games: list[SourceGame], known: tuple[str, ...],
@@ -242,6 +261,8 @@ def left_behind(source_id: str, games: list[SourceGame], known: tuple[str, ...],
         holds_logos = _holds_logos(source_id, game)
         unplaced = []
         for item in game.media:
+            if item.chosen in _NO_KIND:
+                continue
             kind = _moving_form(_kind_of(source_id, item, wheels_as, holds_logos), item.path)
             if kind not in known:
                 unplaced.append((item.source_kind, item.path, "off" if kind in off else ""))
@@ -251,6 +272,75 @@ def left_behind(source_id: str, games: list[SourceGame], known: tuple[str, ...],
             seen.add(path)
             counts[(folder, why)] = counts.get((folder, why), 0) + 1
     return dict(sorted(counts.items()))
+
+
+def leftovers(source_id: str, games: Iterable[SourceGame]) -> dict[str, list[str]]:
+    """The folders a source filed art in that we have no kind for, each with the paths of
+    its files, whatever has been decided about them."""
+    table = KINDS_BY_SOURCE.get(source_id, {})
+    found: dict[str, list[str]] = {}
+    for game in games:
+        for item in game.media:
+            if not table.get(item.source_kind):
+                found.setdefault(item.source_kind, []).append(item.path)
+    return dict(sorted(found.items()))
+
+
+def label_of(folder: str) -> str:
+    """The token a kept folder's files carry: its words joined and capitalized, letters and
+    digits only. Empty where the name has none."""
+    words = re.findall(r"[A-Za-z0-9]+", folder)
+    return "".join(word if word.isupper() else word[:1].upper() + word[1:] for word in words)
+
+
+def kinds_for(paths: list[str], known: tuple[str, ...]) -> tuple[str, ...]:
+    """The kinds of ours a folder's files could be imported as, from what they are."""
+    suffixes = {Path(one).suffix.lower() for one in paths}
+    if not suffixes:
+        return ()
+    wanted: tuple[str, ...]
+    if suffixes <= PICTURE_SUFFIXES:
+        wanted = PICTURE_KINDS
+    elif suffixes <= PICTURE_SUFFIXES | VIDEO_SUFFIXES:
+        wanted = tuple(kind for kind in PICTURE_KINDS if kind in MOVING) + VIDEO_KINDS
+    elif suffixes <= VIDEO_SUFFIXES:
+        wanted = VIDEO_KINDS
+    elif suffixes <= SOUND_SUFFIXES:
+        wanted = SOUND_KINDS
+    else:
+        return ()
+    return tuple(kind for kind in wanted if kind in known)
+
+
+def with_leftovers(library: SourceLibrary, choices: dict[str, str]) -> SourceLibrary:
+    """The library with each file in a folder we have no kind for marked as `choices` says,
+    keeping it with its table where nothing was said. Folders with a kind are untouched."""
+    table = KINDS_BY_SOURCE.get(library.source_id, {})
+
+    def marked(item: SourceMedia) -> SourceMedia:
+        if table.get(item.source_kind):
+            return item
+        said = choices.get(item.source_kind) or KEEP
+        return dataclasses.replace(item, chosen=said.removeprefix(AS))
+
+    return dataclasses.replace(library, systems=tuple(
+        dataclasses.replace(system, games=tuple(
+            dataclasses.replace(game, media=tuple(marked(one) for one in game.media))
+            for game in system.games))
+        for system in library.systems))
+
+
+def kept_for(game: SourceGame) -> list[tuple[str, str]]:
+    """(folder, path) for each file of this game that is kept as it is, beside the others.
+    A folder's files come in page order, so the first page is the same file however the
+    folder was listed."""
+    forms = _name_forms(game)
+    folders: dict[str, list[SourceMedia]] = {}
+    for item in game.media:
+        if item.chosen == KEEP:
+            folders.setdefault(item.source_kind, []).append(item)
+    return [(folder, one.path) for folder, items in sorted(folders.items())
+            for one in _pages(forms, items, one_to_a_page=False)]
 
 
 def folder_name(game: SourceGame) -> str:

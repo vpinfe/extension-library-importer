@@ -218,14 +218,21 @@ class ImportTests(AdoptCase):
         return {row["key"]: (row["expected"], row["actual"], row["short"])
                 for row in plan.against(plan.expected(made), report)}
 
-    def _brought(self, source_id: str, key: str, files: dict[str, tuple[str, bytes]], **asked):
+    def _brought(self, source_id: str, key: str, files: dict[str, tuple[str, bytes]],
+                 chosen: dict[str, str] | None = None, **asked):
         """One game with a file in each of the folders given, imported on its own.
 
-        `files` maps a file name to the source folder it sits in and its bytes. Answers the
-        row and the names that landed beside the game.
+        `files` maps a file name to the source folder it sits in and its bytes. `chosen`
+        is what was said of a folder with no kind of ours. Answers the row and the names
+        that landed beside the game.
         """
-        from vpinfe_ext_library_importer import adopt
-        from vpinfe_ext_library_importer.source import SourceGame, SourceMedia
+        from vpinfe_ext_library_importer import adopt, mapping
+        from vpinfe_ext_library_importer.source import (
+            SourceGame,
+            SourceLibrary,
+            SourceMedia,
+            SourceSystem,
+        )
 
         folder = self.root / f"artwork {key}"
         folder.mkdir()
@@ -235,6 +242,9 @@ class ImportTests(AdoptCase):
             (folder / name).write_bytes(data)
             media.append(SourceMedia(source_kind=source_kind, path=str(folder / name)))
         game = SourceGame(key=key, media=tuple(media))
+        game = mapping.with_leftovers(
+            SourceLibrary(source_id=source_id, root=str(folder), systems=(
+                SourceSystem(name=VPX, games=(game,)),)), chosen or {}).games[0]
         row = adopt._one(self._ctx, source_id, game, self._ctx.games.kinds(), "", **asked)
         landed = self.library / key / "medias"
         return row, sorted(one.name for one in landed.iterdir()) if landed.is_dir() else []
@@ -431,13 +441,15 @@ class ImportTests(AdoptCase):
         self.assertEqual(self._pages_of("Doom", "GameInfo"), [b"inside", b"back"])
         self.assertEqual(row["skipped_media"], ["Flyer Images/Front"])
 
-    def test_a_real_dmd_video_lands_in_its_own_slot_and_an_f4v_is_named(self) -> None:
+    def test_a_real_dmd_video_lands_in_its_slot_and_an_f4v_is_kept_as_it_arrived(self) -> None:
         row, landed = self._brought("pinballx", "Doom", {
             "Doom.mp4": ("Real DMD Videos", b"a clip"),
             "Doom.f4v": ("Real DMD Color Videos", b"a flash clip")})
 
-        self.assertEqual(landed, ["(RealDMD) Doom.mp4"])
-        self.assertEqual(row["skipped_media"], ["Real DMD Color Videos"])
+        self.assertEqual(landed, ["(RealColorDMD) Doom.f4v", "(RealDMD) Doom.mp4"])
+        self.assertEqual(row["media"], 2)
+        self.assertEqual(row["kept"], 1)
+        self.assertEqual(row["skipped_media"], [])
 
     def test_a_video_in_a_picture_folder_never_reaches_core(self) -> None:
         with unittest.mock.patch.object(self._ctx.games, "put_media") as put:
@@ -456,6 +468,83 @@ class ImportTests(AdoptCase):
         self.assertEqual(row["media"], 0)
         self.assertEqual(row["skipped_media"], ["Instruction Cards"])
         self.assertEqual(row["refused"], ["Instruction Cards"])
+
+    def test_a_folder_with_no_kind_is_kept_with_its_table_under_the_naming_standard(self) -> None:
+        row, landed = self._brought("popper", "Doom", {
+            "Doom.png": ("Other1", b"one"),
+            "Doom 2.png": ("Other1", b"two")})
+
+        self.assertEqual(landed, ["(Other1 2) Doom.png", "(Other1) Doom.png"])
+        self.assertEqual(row["kept"], 2)
+        self.assertEqual(row["media"], 0)
+        self.assertEqual(row["skipped_media"], [])
+
+    def test_a_kept_file_displaces_nothing_a_kind_holds(self) -> None:
+        row, landed = self._brought("popper", "Doom", {
+            "Doom.png": ("GameInfo", b"the flyer"),
+            "Doom x.png": ("Other1", b"kept")})
+
+        self.assertEqual(sorted(landed), ["(GameInfo) Doom.png", "(Other1) Doom.png"])
+        self.assertEqual(self._pages_of("Doom", "GameInfo"), [b"the flyer"])
+
+    def test_a_folder_named_for_a_kind_still_takes_a_label_that_is_not_the_kinds(self) -> None:
+        row, landed = self._brought("popper", "Doom", {"Doom.png": ("Instruction Notes", b"n")})
+
+        self.assertEqual(landed, ["(InstructionNotes) Doom.png"])
+
+    def test_a_folder_chosen_as_a_kind_is_placed_in_its_slot(self) -> None:
+        row, landed = self._brought("popper", "Doom", {"Doom.png": ("Other1", b"top")},
+                                    chosen={"Other1": "as:topper"})
+
+        self.assertEqual(landed, ["(Topper) Doom.png"])
+        self.assertEqual(row["media"], 1)
+        self.assertEqual(row.get("kept", 0), 0)
+
+    def test_a_folder_chosen_to_leave_brings_nothing(self) -> None:
+        row, landed = self._brought("popper", "Doom", {"Doom.png": ("Other1", b"x")},
+                                    chosen={"Other1": "skip"})
+
+        self.assertEqual(landed, [])
+        self.assertEqual(row.get("kept", 0), 0)
+
+    def test_a_kept_name_already_there_is_left_alone(self) -> None:
+        row, _landed = self._brought("popper", "Doom", {"Doom.png": ("Other1", b"first")})
+
+        from vpinfe_ext_library_importer import adopt
+
+        again = self.root / "again"
+        again.mkdir()
+        (again / "Doom.png").write_bytes(b"second")
+        self._ctx.files.set_roots([str(FIXTURE), str(again)])
+        from vpinfe_ext_library_importer.source import SourceGame, SourceMedia
+
+        game = SourceGame(key="Doom", media=(
+            SourceMedia("Other1", str(again / "Doom.png"), chosen="keep"),))
+        adopt._place_media(self._ctx, row["game_id"], "popper", game,
+                           self._ctx.games.kinds(), "", False, dict(row, media=0, kept=0))
+
+        held = self.library / "Doom" / "medias" / "(Other1) Doom.png"
+        self.assertEqual(held.read_bytes(), b"first")
+
+    def test_a_video_a_slot_cannot_play_is_kept_as_it_arrived_not_refused(self) -> None:
+        row, landed = self._brought("popper", "Doom", {"Doom.avi": ("Topper", b"clip")})
+
+        self.assertEqual(row["refused"], [])
+        self.assertEqual(row.get("kept", 0), 1)
+        self.assertEqual([one for one in landed if one.endswith(".avi")], landed)
+
+    def test_pages_a_slot_cannot_play_keep_their_page_and_do_not_overwrite_each_other(self) -> None:
+        row, landed = self._brought("popper", "Doom", {
+            "Doom.tif": ("GameInfo", b"one"), "Doom 2.tif": ("GameInfo", b"two")})
+
+        self.assertEqual(landed, ["(GameInfo 2) Doom.tif", "(GameInfo) Doom.tif"])
+        self.assertEqual(row["refused"], [])
+
+    def test_a_folder_named_for_a_kind_without_a_slot_is_kept_under_other_first(self) -> None:
+        row, landed = self._brought("pinballx", "Doom", {"Doom.png": ("DMD", b"x")})
+
+        self.assertEqual(landed, ["(OtherDMD) Doom.png"])
+        self.assertEqual(row["refused"], [])
 
     def test_a_cleared_media_source_brings_no_artwork_and_the_report_agrees(self) -> None:
         from vpinfe_ext_library_importer import plan

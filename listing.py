@@ -27,3 +27,13 @@ def files_across(root: Path, folders: Sequence[str]) -> list[list[tuple[str, str
         return []
     with ThreadPoolExecutor(max_workers=len(folders)) as pool:
         return list(pool.map(lambda name: files_in(root / name), folders))
+
+
+def folders_in(folder: Path) -> list[str]:
+    """The names of the folders directly in a folder, sorted; nothing where it cannot be
+    read."""
+    try:
+        with os.scandir(folder) as entries:
+            return sorted(entry.name for entry in entries if entry.is_dir())
+    except OSError:
+        return []

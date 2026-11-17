@@ -46,6 +46,9 @@ class SourceMedia:
     path: str
     # Filed in a folder every system shares, not in the system's own.
     shared: bool = False
+    # What was decided for a folder with no kind of ours: `keep`, `skip`, or the kind it
+    # is to be imported as. Empty until `mapping.with_leftovers` has been through it.
+    chosen: str = ""
 
 
 @dataclass(frozen=True)

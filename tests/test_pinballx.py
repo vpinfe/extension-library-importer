@@ -163,6 +163,38 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(images, ["Taxi 2.png"])
 
 
+class UnlistedFolderTests(unittest.TestCase):
+    """A folder under a system's media that PinballX has no kind for."""
+
+    def setUp(self) -> None:
+        self.pinballx = _reader()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def _touch(self, *parts: str) -> None:
+        path = self.root.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+
+    def test_a_folder_nothing_reads_is_named_for_the_wizard_to_ask_about(self) -> None:
+        for folder in ("Table Images", "Cards", "Instruction Cards", "Flyer Images",
+                       "@eaDir", ".hidden"):
+            self._touch(folder, "Taxi.png")
+
+        self.assertEqual(self.pinballx.unlisted_media_folders(self.root), ["Cards"])
+
+    def test_a_file_in_such_a_folder_belongs_to_its_game_by_name(self) -> None:
+        self._touch("Cards", "Taxi.png")
+        self._touch("Cards", "Other.png")
+        from vpinfe_ext_library_importer.source import SourceGame
+
+        games = self.pinballx.read_media(self.root, [SourceGame(key="Taxi")])
+
+        self.assertEqual([(one.source_kind, Path(one.path).name) for one in games[0].media],
+                         [("Cards", "Taxi.png")])
+
+
 class SharedMediaTests(unittest.TestCase):
     """PinballY files the real DMD pictures under each system and the instruction cards and
     flyers once for all of them."""
