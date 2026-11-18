@@ -151,7 +151,7 @@ class CheckTests(WizardCase):
         self.assertTrue(found["ready"])
         summary = dict(one for one in found["summary"] if len(one) == 2)
         self.assertEqual(summary["Games"], "4")
-        self.assertEqual(summary["Reads As"], "PinballX / PinballY")
+        self.assertEqual(summary["Coming From"], "PinballX / PinballY")
 
     def test_the_play_history_is_a_file_and_the_rest_are_folders(self) -> None:
         """A folder check marks a file missing, and the history is one file."""
@@ -305,9 +305,9 @@ class TablesAndMatchesTests(WizardCase):
         self.assertEqual((found["step"], field["type"]), ("matches", "settle"))
         self.assertEqual(settled, {"Attack from Mars (Bally 1995)": False, "Taxi": True,
                                    "Taxi 2": False, "Big Bang Bar (Capcom 1996)": False})
-        self.assertTrue(found["help"].startswith("VPS, the Virtual Pinball Spreadsheet, is "))
-        self.assertIn("3 games could not be matched on their own", found["help"])
-        self.assertIn("A game you leave is still imported, as Not matched", found["help"])
+        self.assertTrue(found["help"].startswith("Matching a game to VPS, the Virtual Pinball "))
+        self.assertIn("3 games need your help", found["help"])
+        self.assertIn("match it later from Games", found["help"])
 
     def test_ticks_given_about_other_systems_are_not_carried_over(self) -> None:
         narrowed = self._step(FIXTURE, leaving="sources", systems=["Visual Pinball X"],
@@ -345,7 +345,7 @@ class TablesAndMatchesTests(WizardCase):
         rows = {one["key"]: one for one in found["fields"][0]["rows"]}
 
         self.assertTrue(rows["Taxi 2"]["settled"])
-        self.assertIn("2 games could not be matched on their own", found["help"])
+        self.assertIn("2 games need your help", found["help"])
 
         summary = dict(one for one in self._check(FIXTURE, picks={"Taxi 2": "vps-zebra"})
                        ["summary"] if len(one) == 2)
@@ -535,7 +535,7 @@ class RomSummaryTests(WizardCase):
 
         rows = self.summary(self.installed(), roms=str(roms))
 
-        self.assertEqual(rows["Missing ROMs"], "1 table needs a ROM that is not there")
+        self.assertEqual(rows["Missing ROMs"], "1 game needs a ROM that was not found")
 
     def test_a_rom_the_folder_holds_in_another_case_is_not_missing(self) -> None:
         roms = self.root / "roms"
@@ -558,7 +558,7 @@ class RomSummaryTests(WizardCase):
         return str(roms)
 
     def things(self, ticking: list | None = None, **extra) -> dict:
-        """The ROMs and more page, reached the way somebody pressing Next reaches it.
+        """The ROMs and More page, reached the way somebody pressing Next reaches it.
         `ticking` is the answer to the games page, where it is not left as offered."""
         source = self.installed()
         answers = {"roms": self.rom_folder(), "into": str(self.root / "library"), **extra}
@@ -583,7 +583,7 @@ class RomSummaryTests(WizardCase):
         self.assertEqual(found["step"], "things")
         field = found["fields"][0]
         self.assertEqual((field["key"], field["label"], field["value"], field["help"]),
-                         ("use_roms", "ROMs", True, "1 game"))
+                         ("use_roms", "ROMs", True, "Used by 1 game"))
 
     def test_a_thing_switched_off_is_left_out_of_what_comes_across(self) -> None:
         rows = self.summary(self.installed(), roms=self.rom_folder(), use_roms=False)
@@ -677,7 +677,8 @@ class NamesArtAndThingsTests(WizardCase):
         page = self.page("media", source=self.with_folder_of_cards())
 
         field = self._leftover(page)
-        self.assertEqual(field["label"], "Cards Files")
+        self.assertEqual(field["label"], "Cards Folder")
+        self.assertEqual(field["help"], "1 file, for Taxi")
         self.assertEqual(field["value"], "keep")
         ids = [one[0] for one in field["choices"]]
         self.assertEqual((ids[0], ids[-1]), ("keep", "skip"))
@@ -699,11 +700,11 @@ class NamesArtAndThingsTests(WizardCase):
         made = self.walk(source=source, **{key: "as:topper"})[-1]["summary"]
 
         def other(summary: list) -> str:
-            return next(row[1] for row in summary if row[0] == "Other Media")
+            return next(row[1] for row in summary if row[0] == "Cards Folder")
 
-        self.assertEqual(other(kept), "Cards, kept with each table")
-        self.assertEqual(other(left), "Cards, left behind")
-        self.assertEqual(other(made), "Cards, as Topper")
+        self.assertEqual(other(kept), "Kept as extra files")
+        self.assertEqual(other(left), "Not imported")
+        self.assertEqual(other(made), "Used as Topper")
         for summary in (kept, left, made):
             self.assertFalse([row for row in summary if row[0] == "Files Not Imported"
                               and "Cards" in str(row[1])])
@@ -714,8 +715,8 @@ class NamesArtAndThingsTests(WizardCase):
 
         summary = self.walk(source=source, **{key: "as:audio"})[-1]["summary"]
 
-        self.assertEqual(next(row[1] for row in summary if row[0] == "Other Media"),
-                         "Cards, kept with each table")
+        self.assertEqual(next(row[1] for row in summary if row[0] == "Cards Folder"),
+                         "Kept as extra files")
 
     def test_the_names_page_shows_what_a_folder_would_be_called(self) -> None:
         page = self.page("names")
@@ -723,8 +724,8 @@ class NamesArtAndThingsTests(WizardCase):
         names = page["fields"][0]
         self.assertEqual((names["value"], [one[0] for one in names["choices"]]),
                          ("vps", ["vps", "source"]))
-        self.assertEqual(names["choices"][0][1], "From VPS")
-        self.assertEqual(names["choices"][1][1], "As in PinballX / PinballY")
+        self.assertEqual(names["choices"][0][1], "VPS Names")
+        self.assertEqual(names["choices"][1][1], "PinballX / PinballY Names")
         self.assertIn("Taxi (Williams 1988) becomes Taxi (Midway 1999)", names["help"])
 
     def test_the_details_page_counts_where_the_two_disagree(self) -> None:
@@ -732,7 +733,7 @@ class NamesArtAndThingsTests(WizardCase):
 
         details = page["fields"][1]
         self.assertEqual([one[0] for one in details["choices"]], ["vps", "source", "some"])
-        self.assertEqual(details["help"], "Where they differ: Maker 1, Year 1")
+        self.assertEqual(details["help"], "Where VPS differs: Manufacturer (1 game), Year (1 game)")
         self.assertEqual(page["fields"][2]["value"], ["manufacturer", "year"])
 
     def test_nothing_is_asked_where_the_entry_changes_nothing(self) -> None:
@@ -741,8 +742,8 @@ class NamesArtAndThingsTests(WizardCase):
     def test_keeping_the_sources_names_is_said_on_the_summary(self) -> None:
         rows = self.rows(names="source", details="source")
 
-        self.assertEqual(rows["Folder Names"], "As in PinballX / PinballY")
-        self.assertEqual(rows["Details"], "Keep PinballX / PinballY's")
+        self.assertEqual(rows["Folder Names"], "PinballX / PinballY Names")
+        self.assertEqual(rows["Details"], "PinballX / PinballY Details")
 
     def test_choosing_which_details_to_keep_names_them(self) -> None:
         rows = self.rows(details="some", details_some=["year"])
@@ -753,10 +754,9 @@ class NamesArtAndThingsTests(WizardCase):
         page = self.page("media")
 
         wheels_as = page["fields"][0]
-        self.assertEqual([one[0] for one in wheels_as["choices"]], ["logo", "wheel"])
-        self.assertEqual([one[1] for one in wheels_as["choices"]], ["Logos", "Wheels"])
+        self.assertEqual([one[0] for one in wheels_as["choices"]], ["wheel", "logo"])
+        self.assertEqual([one[1] for one in wheels_as["choices"]], ["Wheels", "Logos"])
         self.assertTrue(all(one[3] for one in wheels_as["choices"]))
-        self.assertIn("Wheel 1", page["help"])
         self.assertNotIn("show_logos", [one["key"] for one in page["fields"]])
 
     def test_wheel_images_that_are_not_pictures_it_can_read_are_wheels(self) -> None:
@@ -769,31 +769,12 @@ class NamesArtAndThingsTests(WizardCase):
 
         self.assertEqual(page["fields"][0]["value"], "logo")
 
-    def test_the_option_the_images_look_like_says_so(self) -> None:
-        from extensions.library_importer.tests.test_shapes import png
-
-        wheels = self.page("media", source=self.with_wheels(png(300, 300)))[
-            "fields"][0]["choices"]
-        logos = self.page("media", source=self.with_wheels(png(800, 200), "logos"))[
-            "fields"][0]["choices"]
-
-        self.assertNotIn("Yours look like this", wheels[0][2])
-        self.assertIn("Yours look like this", wheels[1][2])
-        self.assertIn("Yours look like this", logos[0][2])
-        self.assertNotIn("Yours look like this", logos[1][2])
-
-    def test_nothing_is_claimed_of_images_that_could_not_be_measured(self) -> None:
-        choices = self.page("media")["fields"][0]["choices"]
-
-        for choice in choices:
-            self.assertNotIn("Yours look like this", choice[2])
-
     def test_the_summary_says_what_the_wheel_images_are_kept_as(self) -> None:
         wheels = self.rows(wheels_as="wheel")
         logos = self.rows(wheels_as="logo")
 
-        self.assertEqual(wheels["Wheel Images"], "Wheels")
-        self.assertEqual(logos["Wheel Images"], "Logos, shown in place of wheels")
+        self.assertEqual(wheels["Wheel Pictures"], "Used as wheels")
+        self.assertEqual(logos["Wheel Pictures"], "Used as logos")
         self.assertEqual(logos["Download Missing Media"], "Yes")
 
     def test_missing_media_is_not_fetched_when_the_switch_is_off(self) -> None:

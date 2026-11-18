@@ -221,7 +221,7 @@ class ReaderTests(FolderCase):
         choices = {row[0]: row[1] for row in
                    self.client.get(f"{BASE}/actions/import").json()["fields"][0]["choices"]}
 
-        self.assertEqual(choices["folders"], "No frontend")
+        self.assertEqual(choices["folders"], "A Folder of Tables")
         self.assertEqual(list(choices)[-1], "folders")
 
 
@@ -233,7 +233,7 @@ class StepTests(FolderCase):
 
         found = self.step(self.tables, leaving="how", how="move")
 
-        self.assertEqual(self.summary_of(found)["Reads As"], "No frontend")
+        self.assertEqual(self.summary_of(found)["Coming From"], "A Folder of Tables")
 
     def test_the_second_step_works_out_the_game_files_and_leaves_the_rest_blank(self) -> None:
         self.loose("Harbor Lights")
@@ -269,7 +269,7 @@ class StepTests(FolderCase):
         found = self.step("", source_type="folders")
 
         self.assertEqual(found["step"], "sources")
-        self.assertEqual(found["title"], "Where your files are")
+        self.assertEqual(found["title"], "Where Your Files Are")
         self.assertNotIn("errors", found)
         fields = {one["key"]: one for one in found["fields"]}
         self.assertEqual(sorted(fields),
@@ -295,7 +295,7 @@ class StepTests(FolderCase):
         found = self.step(self.tables, leaving="how", source_type="folders",
                           tables=str(elsewhere), how="move")
 
-        self.assertEqual(self.summary_of(found)["Folder"], str(elsewhere))
+        self.assertEqual(self.summary_of(found)["Source Folder"], str(elsewhere))
         self.assertEqual(self.summary_of(found)["Games"], "1")
 
     def test_the_second_step_is_checked_with_no_folder_typed_on_the_first(self) -> None:
@@ -436,7 +436,7 @@ class StepTests(FolderCase):
         found = self.step(source, leaving="media")
 
         choices = found["fields"][0]["choices"]
-        self.assertIn("find these tables", choices[1][2])
+        self.assertIn("won't find them anymore", choices[1][2])
         self.assertIn("PinballX", choices[1][2])
 
     def test_moving_from_a_folder_names_no_frontend(self) -> None:
@@ -444,7 +444,7 @@ class StepTests(FolderCase):
 
         choices = self.step(self.tables, leaving="games")["fields"][0]["choices"]
 
-        self.assertNotIn("find these tables", choices[1][2])
+        self.assertNotIn("won't find them anymore", choices[1][2])
 
     def test_copying_with_nowhere_to_copy_to_is_sent_back(self) -> None:
         self.loose("Harbor Lights")
@@ -503,7 +503,7 @@ class StepTests(FolderCase):
 
         found = self.step(self.tables, leaving="how", how="move", into=f" {self.library} ")
 
-        self.assertEqual(self.summary_of(found)["Going Into"], str(self.library))
+        self.assertEqual(self.summary_of(found)["Library Folder"], str(self.library))
 
     def test_a_copy_summary_names_where_and_what_it_takes(self) -> None:
         self.loose("Harbor Lights", size=3000)
@@ -512,8 +512,8 @@ class StepTests(FolderCase):
         summary = self.summary_of(found)
 
         self.assertTrue(found["ready"])
-        self.assertEqual(summary["How"], "Copied")
-        self.assertEqual(summary["Going Into"], str(self.library))
+        self.assertEqual(summary["Copy or Move"], "Copy")
+        self.assertEqual(summary["Library Folder"], str(self.library))
         self.assertTrue(summary["Space Needed"].startswith("2.9 KB, with "), summary)
         self.assertEqual(found["confirm"], "Copy 1 table")
 
@@ -523,8 +523,8 @@ class StepTests(FolderCase):
         found = self.step(self.tables, leaving="how", how="move")
         summary = self.summary_of(found)
 
-        self.assertEqual(summary["How"], "Moved")
-        self.assertIn(str(self.tables), summary["Going Into"])
+        self.assertEqual(summary["Copy or Move"], "Move")
+        self.assertIn(str(self.tables), summary["Library Folder"])
         self.assertNotIn("Space Needed", summary)
         self.assertEqual(found["confirm"], "Move 1 table")
 
@@ -534,7 +534,7 @@ class StepTests(FolderCase):
         found = self.step(self.tables, leaving="how", how="move", into=str(self.library))
         summary = self.summary_of(found)
 
-        self.assertEqual(summary["Going Into"], str(self.library))
+        self.assertEqual(summary["Library Folder"], str(self.library))
         self.assertNotIn("Space Needed", summary)
 
     def test_a_move_into_a_folder_on_another_drive_takes_the_room_a_copy_does(self) -> None:
@@ -574,6 +574,7 @@ class StepTests(FolderCase):
         self.assertEqual(summary["Used where they are"], "1 game folder")
         self.assertEqual(found["confirm"], "Use this folder")
         self.assertNotIn("How", summary)
+        self.assertNotIn("Copy or Move", summary)
 
     def test_a_folder_of_both_is_not_asked_how(self) -> None:
         """The game folders say it is a library folder already; its loose tables get
@@ -609,7 +610,7 @@ class StepTests(FolderCase):
 
         self.assertEqual(found["step"], "summary")
         self.assertTrue(found["ready"], found)
-        self.assertEqual(self.summary_of(found)["Reads As"], "No frontend")
+        self.assertEqual(self.summary_of(found)["Coming From"], "A Folder of Tables")
         self.assertEqual(self.summary_of(found)["Used where they are"], "1 game folder")
 
 
@@ -627,7 +628,7 @@ class StartingPastAlreadyHereTests(FolderCase):
         row = found["fields"][0]["rows"][0]
         self.assertEqual(found["step"], "games")
         self.assertEqual((row["key"], row["groups"]), ("Harbor Lights", ["here"]))
-        self.assertEqual(row["note"], "Same folder, nothing to add")
+        self.assertEqual(row["note"], "Already here, nothing to add")
 
     def test_a_caller_can_start_past_the_question(self) -> None:
         found = self.step(self.tables, leaving="sources", skip_existing=True)
@@ -1036,7 +1037,7 @@ class SystemsRunTests(FolderCase):
 
     def test_the_summary_names_only_the_folders_that_are_moved_into(self) -> None:
         found = self.step(self.tables, leaving="how", how="move", systems=["Alpha"])
-        going = self.summary_of(found)["Going Into"]
+        going = self.summary_of(found)["Library Folder"]
 
         self.assertIn(str(self.alpha), going)
         self.assertNotIn(str(self.beta), going)
@@ -1130,7 +1131,7 @@ class SurveyedOnceTests(FolderCase):
         found = self.step(self.tables, leaving="games")
 
         self.assertEqual(self.survey.call_count, 3)
-        self.assertEqual(found["help"], "2 tables from Tables")
+        self.assertEqual(found["help"], "2 tables, from the Tables folder")
 
     def test_a_later_step_takes_what_the_first_read(self) -> None:
         self.step(self.tables)
@@ -1139,7 +1140,7 @@ class SurveyedOnceTests(FolderCase):
         found = self.step(self.tables, leaving="games")
 
         self.assertEqual(self.survey.call_count, 2)
-        self.assertEqual(found["help"], "1 table from Tables")
+        self.assertEqual(found["help"], "1 table, from the Tables folder")
 
     def test_the_preview_surveys_it_once(self) -> None:
         self.client.put(f"{BASE}/source", json={"path": str(self.tables)})

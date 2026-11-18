@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
@@ -133,7 +132,7 @@ def _chosen(values: dict) -> dict | None:
 
 
 def _switched(values: dict) -> dict | None:
-    """`_chosen`, with a kind of thing the ROMs and more page switched off read as a folder
+    """`_chosen`, with a kind of thing the ROMs and More page switched off read as a folder
     left empty on purpose."""
     chosen = dict(_chosen(values) or {})
     for key in things.FOLDER:
@@ -822,9 +821,7 @@ def build(ctx: Any) -> None:
             # Play history is one file - GameStats.csv or the Popper database - where
             # every other source is a folder, and a folder check marks it missing.
             **({"wants": "file"} if source.key == "history" else {}),
-            "help": (ctx.t("wizard.sources.worked_out", help=source.help) if source.help
-                     else ctx.t("wizard.sources.worked_out_alone"))
-            if source.derived else source.help,
+            "help": source.help,
         } for source in sources]
 
         # Only where there is a choice to make. One system is not a decision, and a
@@ -842,7 +839,7 @@ def build(ctx: Any) -> None:
         found: dict[str, Any] = {
             "step": "sources",
             "title": (ctx.t("wizard.sources.no_frontend.title") if no_frontend
-                      else ctx.t("wizard.sources.title", source=_name(ctx, reader))),
+                      else ctx.t("wizard.sources.title")),
             "help": (ctx.t("wizard.sources.no_frontend.help") if no_frontend
                      else ctx.t("wizard.sources.help")),
             "fields": fields,
@@ -884,8 +881,8 @@ def build(ctx: Any) -> None:
                 ctx.logger.warning("Could not read %s to say what it is missing", one.folder,
                                    exc_info=True)
                 brings = ""
-            how = ctx.t(f"match.{one.how}")
-            notes.append(ctx.t("wizard.games.here", how=how, adds=brings) if brings else how)
+            notes.append(ctx.t("wizard.games.here", adds=brings) if brings
+                         else ctx.t("wizard.games.here_only"))
         if one.hidden:
             groups.append("hidden")
             notes.append(ctx.t("wizard.games.hidden", source=source))
@@ -933,13 +930,13 @@ def build(ctx: Any) -> None:
                  "reason": ctx.t(f"why.{one.reason}") if one.reason in plan_for.WHY else "",
                  "settled": bool(one.vps_id) or one.found_by == "picked"}
                 for one in made.making]
+        unsettled = sum(1 for one in rows if not one["settled"])
         return {
             "step": "matches",
             "title": ctx.t("wizard.matches.title"),
-            "help": " ".join((
-                ctx.t("wizard.matches.about"), ctx.t("wizard.matches.gains"),
-                ctx.t("wizard.matches.ask", count=sum(1 for one in rows if not one["settled"])),
-                ctx.t("wizard.matches.leave"))),
+            "help": " ".join(filter(None, (
+                ctx.t("wizard.matches.about"),
+                ctx.t("wizard.matches.ask", count=unsettled) if unsettled else ""))),
             "fields": [{"key": key, "type": "settle",
                         "label": ctx.t("wizard.matches.label"), "rows": rows,
                         "value": dict(values.get(key) or {})}],
@@ -965,8 +962,7 @@ def build(ctx: Any) -> None:
         return {
             "step": "names",
             "title": ctx.t("wizard.names.title"),
-            "help": (ctx.t("wizard.names.help_plain") if plain
-                     else ctx.t("wizard.names.help", source=source)),
+            "help": ctx.t("wizard.names.help"),
             "fields": [
                 {"key": "names", "type": "choice",
                  "label": ctx.t("wizard.names.names.label"),
@@ -985,7 +981,8 @@ def build(ctx: Any) -> None:
                  "label": ctx.t("wizard.names.details.label"),
                  "value": str(said.get("details") or plan_for.DEFAULT_DETAILS),
                  "choices": [
-                     ["vps", ctx.t("wizard.names.vps"), ctx.t("wizard.names.details.vps.help"),
+                     ["vps", ctx.t("wizard.names.details.vps"),
+                      ctx.t("wizard.names.details.vps.help"),
                       "cloud_done"],
                      ["source", (ctx.t("wizard.names.details.source_plain") if plain
                                  else ctx.t("wizard.names.details.source", source=source)),
@@ -1016,12 +1013,27 @@ def build(ctx: Any) -> None:
         if not (pictures or makers or leftovers):
             return None
         return {"images": wheel_files(library, answers(values)), "makers": len(makers),
-                "leftovers": leftovers}
+                "leftovers": leftovers,
+                "leftover_titles": mapping.leftover_titles(library.source_id, library.games)}
+
+    def _leftover_help(paths: list[str], titles: list[str]) -> str:
+        """How many files a folder holds and whose they are, in the names a person knows
+        the games by."""
+        files = ctx.t("wizard.media.leftover.files", count=len(paths))
+        if not titles:
+            return files
+        if len(titles) == 1:
+            whose = ctx.t("wizard.media.leftover.for_one", first=titles[0])
+        elif len(titles) == 2:
+            whose = ctx.t("wizard.media.leftover.for_two", first=titles[0], second=titles[1])
+        else:
+            whose = ctx.t("wizard.media.leftover.for_many", first=titles[0], second=titles[1])
+        return ctx.t("wizard.media.leftover.help", files=files, whose=whose)
 
     def _leftover_field(library: SourceLibrary, index: int, folder: str, paths: list[str],
-                        values: dict) -> dict[str, Any]:
-        """What to do with the files of one folder that has no kind of ours: keep them with
-        their tables, import them as a kind they could be, or leave them."""
+                        titles: list[str], values: dict) -> dict[str, Any]:
+        """What to do with the files of one folder that has no kind of ours: keep them as
+        extra files with their games, use them as a kind they could be, or not import them."""
         choices = [[mapping.KEEP, ctx.t("wizard.media.leftover.keep")]]
         choices += [[f"{mapping.AS}{kind}",
                      ctx.t("wizard.media.leftover.as", name=ctx.t(f"media.kind.{kind}"))]
@@ -1031,7 +1043,7 @@ def build(ctx: Any) -> None:
         return {"key": answer_key(f"leftover_{index}"), "type": "select",
                 "label": ctx.t("wizard.media.leftover.label", folder=folder),
                 "value": chosen, "choices": choices,
-                "help": ctx.t("wizard.media.leftover.help", count=len(paths))}
+                "help": _leftover_help(paths, titles)}
 
     def _media_step(reader: ModuleType, library: SourceLibrary, made: Plan, values: dict,
                     media: dict[str, Any]) -> dict:
@@ -1040,20 +1052,10 @@ def build(ctx: Any) -> None:
         said = answers(values)
         source = _name(ctx, reader)
         images = media["images"]
-        kinds = Counter(kind for one in (*made.making, *made.filling) for kind in one.kinds)
-        found = ", ".join(ctx.t("wizard.media.kind", name=ctx.t(f"media.kind.{kind}"), count=count)
-                          for kind, count in kinds.most_common() if count)
+        pictures = any(one.kinds for one in (*made.making, *made.filling))
         fields: list[dict[str, Any]] = []
         if images:
             sample = images[::max(1, len(images) // 3)][:3]
-            looks = looks_like(library, said)
-
-            def option(kind: str, name: str, help_text: str) -> list[Any]:
-                if kind == looks:
-                    help_text = (ctx.t("wizard.media.looks_like", help=help_text) if help_text
-                                 else ctx.t("wizard.media.looks_like_alone"))
-                return [kind, name, help_text, sample]
-
             fields.append(
                 {"key": answer_key("wheels_as"), "type": "choice",
                  "label": (ctx.t("wizard.media.wheels_as.label_plain")
@@ -1061,19 +1063,17 @@ def build(ctx: Any) -> None:
                            else ctx.t("wizard.media.wheels_as.label", source=source)),
                  "value": wheels_as_of(library, said),
                  "choices": [
-                     option(mapping.LOGOS, ctx.t("wizard.media.logos"),
-                            ctx.t("wizard.media.logos.help")),
-                     option(mapping.WHEELS, ctx.t("wizard.media.wheels"), "")]})
+                     [mapping.WHEELS, ctx.t("wizard.media.wheels"),
+                      ctx.t("wizard.media.wheels.help"), sample],
+                     [mapping.LOGOS, ctx.t("wizard.media.logos"),
+                      ctx.t("wizard.media.logos.help"), sample]]})
         for index, (folder, paths) in enumerate(media["leftovers"].items()):
-            fields.append(_leftover_field(library, index, folder, paths, values))
+            fields.append(_leftover_field(library, index, folder, paths,
+                                          media["leftover_titles"].get(folder, []), values))
         fields.append({"key": "fetch_media", "type": "switch",
                        "label": ctx.t("wizard.media.fetch.label"),
                        "value": _on(said, "fetch_media"),
-                       "help": " ".join((ctx.t("wizard.media.fetch.what"),
-                                         ctx.t("wizard.media.fetch.about"),
-                                         ctx.t("wizard.media.fetch.fills"),
-                                         ctx.t("wizard.media.fetch.matched"),
-                                         ctx.t("wizard.media.fetch.later")))})
+                       "help": ctx.t("wizard.media.fetch.help")})
         if media["makers"]:
             fields.append({"key": "logos", "type": "switch",
                            "label": ctx.t("wizard.media.logos.label"),
@@ -1083,7 +1083,9 @@ def build(ctx: Any) -> None:
         return {
             "step": "media",
             "title": ctx.t("wizard.media.title"),
-            "help": ctx.t("wizard.media.found", kinds=found) if found else "",
+            "help": " ".join(part for part in (
+                ctx.t("wizard.media.lead") if pictures else "",
+                ctx.t("wizard.media.lead_leftovers") if media["leftovers"] else "") if part),
             "fields": fields,
         }
 
@@ -1115,7 +1117,8 @@ def build(ctx: Any) -> None:
             "fields": [{"key": things.switch(key), "type": "switch",
                         "label": ctx.t(f"wizard.things.{key}.label"),
                         "value": _on(said, things.switch(key)),
-                        "help": ctx.t("wizard.things.count", count=counts[key])}
+                        "help": ctx.t("wizard.things.scores.used" if key == "scores"
+                                      else "wizard.things.used", count=counts[key])}
                        for key in things.THINGS if counts.get(key)],
         }
 
@@ -1143,7 +1146,8 @@ def build(ctx: Any) -> None:
         folder = Path(library.root).name or library.root
         moving_help = (ctx.t("wizard.how.move.folders_help")
                        if library.source_id == folders.SOURCE_ID
-                       else ctx.t("wizard.how.move.frontend_help", source=_name(ctx, reader)))
+                       else ctx.t("wizard.how.move.frontend_help", folder=folder,
+                                  source=_name(ctx, reader)))
         into = suggested_into(values)
         made = not Path(into).expanduser().exists() if into else False
 
@@ -1211,7 +1215,7 @@ def build(ctx: Any) -> None:
 
     def _choice_rows(reader: ModuleType, library: SourceLibrary, made: Plan,
                      values: dict) -> list[list[str]]:
-        """What the Names and details, Art and ROMs and more pages decided."""
+        """What the Names and Details, Art and ROMs and More pages decided."""
         said = answers(values)
         source = _name(ctx, reader)
         plain = library.source_id == folders.SOURCE_ID
@@ -1225,22 +1229,24 @@ def build(ctx: Any) -> None:
                 kept = ", ".join(ctx.t(f"wizard.names.field.{name}")
                                  for name in made.detail_fields)
                 shown = ctx.t("wizard.summary.details_some", fields=kept) if kept \
-                    else ctx.t("wizard.names.vps")
+                    else ctx.t("wizard.names.details.vps")
             else:
                 shown = ((ctx.t("wizard.names.details.source_plain") if plain
                           else ctx.t("wizard.names.details.source", source=source))
-                         if made.details == "source" else ctx.t("wizard.names.vps"))
+                         if made.details == "source" else ctx.t("wizard.names.details.vps"))
             rows.append([ctx.t("wizard.summary.details"), shown])
         media = _media_found(library, made, values)
         if media:
             if media["images"]:
                 rows.append([ctx.t("wizard.summary.wheel_images"),
-                             ctx.t("wizard.media.logos.summary")
+                             ctx.t("wizard.summary.wheel_images.logos")
                              if made.wheels_as == mapping.LOGOS
-                             else ctx.t("wizard.media.wheels")])
+                             else ctx.t("wizard.summary.wheel_images.wheels")])
             rows.append([ctx.t("wizard.media.fetch.label"), _yes(made.fetch_media)])
             if media["makers"]:
-                rows.append([ctx.t("wizard.media.logos.label"), _yes(made.logos)])
+                rows.append([ctx.t("wizard.media.logos.label"),
+                             ctx.t("wizard.summary.added") if made.logos
+                             else ctx.t("wizard.summary.not_added")])
         counts, _short = _things_found(library, values, known(library))
         for key in things.THINGS:
             if counts.get(key):
@@ -1260,13 +1266,13 @@ def build(ctx: Any) -> None:
             return ctx.t(f"kind.{source.key}.not_found")
         return ctx.t("wizard.summary.not_imported")
 
-    def _leftover_said(folder: str, said: str) -> str:
+    def _leftover_said(said: str) -> str:
         if said == mapping.SKIP:
-            return ctx.t("wizard.summary.leftover_skip", folder=folder)
+            return ctx.t("wizard.summary.leftover_skip")
         if said.startswith(mapping.AS):
-            return ctx.t("wizard.summary.leftover_as", folder=folder,
+            return ctx.t("wizard.summary.leftover_as",
                          name=ctx.t(f"media.kind.{said[len(mapping.AS):]}"))
-        return ctx.t("wizard.summary.leftover_keep", folder=folder)
+        return ctx.t("wizard.summary.leftover_keep")
 
     def _summary_step(reader: ModuleType, library: SourceLibrary, made: Plan,
                       values: dict, games: list[SourceGame]) -> dict:
@@ -1306,11 +1312,12 @@ def build(ctx: Any) -> None:
             plan_for.tables_folder(one) for one in plan_for.systems_going(library, games)
             if plan_for.tables_folder(one))) or library.root
         how, going_into = ctx.t("wizard.summary.how"), ctx.t("wizard.summary.going_into")
+        choice, into = ctx.t("wizard.summary.choice"), ctx.t("wizard.summary.into")
         if mode == "copy":
-            rows += [[how, ctx.t("wizard.summary.how.copy")], [going_into, into_of(values)]]
+            rows += [[choice, ctx.t("wizard.summary.how.copy")], [into, into_of(values)]]
         elif mode == "move":
-            rows += [[how, ctx.t("wizard.summary.how.move")],
-                     [going_into,
+            rows += [[choice, ctx.t("wizard.summary.how.move")],
+                     [into,
                       into_of(values) if "into" in values
                       else ctx.t("wizard.how.move.where", folder=inside)]]
         elif mode == "in_place":
@@ -1340,9 +1347,8 @@ def build(ctx: Any) -> None:
         decided = leftover_answers(library, values)
         said_of = {folder: decided.get(folder, mapping.KEEP)
                    for folder in mapping.leftovers(library.source_id, games)}
-        if said_of:
-            rows.append([ctx.t("wizard.summary.leftovers"), ", ".join(
-                _leftover_said(folder, said) for folder, said in said_of.items())])
+        rows += [[ctx.t("wizard.media.leftover.label", folder=folder), _leftover_said(said)]
+                 for folder, said in said_of.items()]
 
         ready = bool(games) or mode == "as_is"
         reason = short or ("" if ready else ctx.t("reason.nothing_left"))

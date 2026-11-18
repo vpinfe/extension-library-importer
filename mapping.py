@@ -286,6 +286,22 @@ def leftovers(source_id: str, games: Iterable[SourceGame]) -> dict[str, list[str
     return dict(sorted(found.items()))
 
 
+def leftover_titles(source_id: str, games: Iterable[SourceGame]) -> dict[str, list[str]]:
+    """The games each of those folders holds files for, by the machine's name without the
+    manufacturer and year, once each and in the source's order."""
+    table = KINDS_BY_SOURCE.get(source_id, {})
+    found: dict[str, list[str]] = {}
+    for game in games:
+        text = (game.title or game.display_name).strip()
+        name = _title_from(game, text) or text or game.key
+        for item in game.media:
+            if not table.get(item.source_kind):
+                titles = found.setdefault(item.source_kind, [])
+                if name not in titles:
+                    titles.append(name)
+    return dict(sorted(found.items()))
+
+
 def label_of(folder: str) -> str:
     """The token a kept folder's files carry: its words joined and capitalized, letters and
     digits only. Empty where the name has none."""

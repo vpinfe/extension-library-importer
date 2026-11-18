@@ -329,6 +329,22 @@ class LeftoverTests(unittest.TestCase):
 
         self.assertEqual(found, {"Other1": ["/m/a.png", "/m/c.png"], "Other2": ["/m/b.png"]})
 
+    def test_each_folder_names_its_games_once_without_manufacturer_and_year(self) -> None:
+        from vpinfe_ext_library_importer.source import SourceLibrary, SourceSystem
+
+        games = (SourceGame(key="taxi_1988", title="Taxi", manufacturer="Williams", year="1988",
+                            display_name="Taxi (Williams 1988)",
+                            media=(SourceMedia("Other1", "/m/a.png"),
+                                   SourceMedia("Other1", "/m/b.png"))),
+                 SourceGame(key="afm", manufacturer="Bally", year="1995",
+                            display_name="Attack from Mars (Bally 1995)",
+                            media=(SourceMedia("Other1", "/m/c.png"),)))
+        library = SourceLibrary(source_id="popper", root="/r",
+                                systems=(SourceSystem(name="VPX", games=games),))
+
+        self.assertEqual(mapping.leftover_titles(library.source_id, library.games),
+                         {"Other1": ["Taxi", "Attack from Mars"]})
+
     def test_a_folder_that_has_a_kind_is_not_one(self) -> None:
         library = self._library(SourceMedia("GameInfo", "/m/a.png"))
 
