@@ -680,10 +680,11 @@ def build(ctx: Any) -> None:
                 {"key": "path", "type": "path", "wants": "dir",
                  "label": ctx.t("wizard.source.path.label"),
                  "value": state["path"],
+                 "shown": {"follows": "source_type",
+                           "for": [pinballx.SOURCE_ID, popper.SOURCE_ID]},
                  "help": {"follows": "source_type", "says": {
-                     "pinballx": ctx.t("wizard.source.path.pinballx"),
-                     "popper": ctx.t("wizard.source.path.popper"),
-                     "folders": ctx.t("wizard.source.path.folders")}}},
+                     pinballx.SOURCE_ID: ctx.t("wizard.source.path.pinballx"),
+                     popper.SOURCE_ID: ctx.t("wizard.source.path.popper")}}},
             ],
         }
 

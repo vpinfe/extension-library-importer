@@ -233,7 +233,7 @@ class StepTests(FolderCase):
 
         found = self.step(self.tables, leaving="how", how="move")
 
-        self.assertEqual(self.summary_of(found)["Coming From"], "A Folder of Tables")
+        self.assertEqual(self.summary_of(found)["Importing From"], "A Folder of Tables")
 
     def test_the_second_step_works_out_the_game_files_and_leaves_the_rest_blank(self) -> None:
         self.loose("Harbor Lights")
@@ -610,7 +610,7 @@ class StepTests(FolderCase):
 
         self.assertEqual(found["step"], "summary")
         self.assertTrue(found["ready"], found)
-        self.assertEqual(self.summary_of(found)["Coming From"], "A Folder of Tables")
+        self.assertEqual(self.summary_of(found)["Importing From"], "A Folder of Tables")
         self.assertEqual(self.summary_of(found)["Used where they are"], "1 game folder")
 
 

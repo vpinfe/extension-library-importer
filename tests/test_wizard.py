@@ -148,6 +148,14 @@ class FormTests(WizardCase):
             next(one["type"] for one in found["fields"] if one["key"] == "path"),
             "path")
 
+    def test_the_folder_is_asked_only_of_the_sources_that_read_one(self) -> None:
+        found = self.client.get(f"{BASE}/actions/import").json()
+
+        rule = next(one["shown"] for one in found["fields"] if one["key"] == "path")
+
+        self.assertEqual(rule["follows"], "source_type")
+        self.assertEqual(sorted(rule["for"]), ["pinballx", "popper"])
+
 
 class CheckTests(WizardCase):
     def test_it_says_what_would_come_across(self) -> None:
@@ -158,7 +166,7 @@ class CheckTests(WizardCase):
         self.assertTrue(found["ready"])
         summary = dict(one for one in found["summary"] if len(one) == 2)
         self.assertEqual(summary["Games"], "4")
-        self.assertEqual(summary["Coming From"], "PinballX / PinballY")
+        self.assertEqual(summary["Importing From"], "PinballX / PinballY")
 
     def test_the_play_history_is_a_file_and_the_rest_are_folders(self) -> None:
         """A folder check marks a file missing, and the history is one file."""
