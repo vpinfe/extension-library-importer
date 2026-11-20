@@ -1525,6 +1525,6 @@ def build(ctx: Any) -> None:
         run = staticmethod(start_import)
         progress = staticmethod(wizard_progress)
 
-    ctx.ui.action("import", ImportDialog())
+    ctx.ui.action("import", ImportDialog(), icon="folder", add=("games", "tables"))
     ctx.add_router(reading)
     ctx.add_router(writing)

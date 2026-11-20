@@ -104,6 +104,11 @@ class DeclarationTests(WizardCase):
         self.assertEqual(action["base"], "/actions/import")
         self.assertTrue(action["label"])
 
+    def test_the_action_is_offered_in_the_plus_of_games_and_tables(self) -> None:
+        found = self.client.get("/extensions").json()["extensions"][0]
+
+        self.assertEqual(found["actions"][0]["add"], ["games", "tables"])
+
     def test_an_action_declares_no_mode(self) -> None:
         """How many steps it has is read off what it answers - the fields it asks
         for and the confirm it names. A declared mode would be a second statement
@@ -112,7 +117,9 @@ class DeclarationTests(WizardCase):
         action = found["actions"][0]
 
         self.assertEqual(
-            sorted(action), ["base", "description", "key", "label", "label_key", "tier"])
+            sorted(action),
+            ["add", "base", "description", "icon", "key", "label", "label_key", "menu",
+             "private_ok", "section", "tier"])
 
     def test_an_extension_that_is_not_running_offers_nothing(self) -> None:
         """A button that refuses is worse than no button."""
