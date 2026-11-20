@@ -644,6 +644,10 @@ class NamesArtAndThingsTests(WizardCase):
                 "type": "EM"}]
     PICKS = {"Taxi": "vps-taxi"}
 
+    @staticmethod
+    def said(key: str, answer: str) -> dict[str, Any]:
+        return {key: answer}
+
     def walk(self, source=FIXTURE, matched: bool = True, **values) -> list[dict]:
         """Every page reached, in order, answering each with the value it offered."""
         pages = []
@@ -711,8 +715,8 @@ class NamesArtAndThingsTests(WizardCase):
         key = self._leftover(page)["key"]
 
         kept = self.walk(source=source)[-1]["summary"]
-        left = self.walk(source=source, **{key: "skip"})[-1]["summary"]
-        made = self.walk(source=source, **{key: "as:topper"})[-1]["summary"]
+        left = self.walk(source=source, **self.said(key, "skip"))[-1]["summary"]
+        made = self.walk(source=source, **self.said(key, "as:topper"))[-1]["summary"]
 
         def other(summary: list) -> str:
             return next(row[1] for row in summary if row[0] == "Cards Folder")
@@ -728,7 +732,7 @@ class NamesArtAndThingsTests(WizardCase):
         source = self.with_folder_of_cards()
         key = self._leftover(self.page("media", source=source))["key"]
 
-        summary = self.walk(source=source, **{key: "as:audio"})[-1]["summary"]
+        summary = self.walk(source=source, **self.said(key, "as:audio"))[-1]["summary"]
 
         self.assertEqual(next(row[1] for row in summary if row[0] == "Cards Folder"),
                          "Kept as extra files")
