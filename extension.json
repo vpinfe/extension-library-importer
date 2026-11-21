@@ -2,7 +2,7 @@
   "name": "library_importer",
   "version": "1.0.0",
   "author": "VPinFE",
-  "home": "https://github.com/vpinfe/extension-library-importer",
+  "home": "https://github.com/vpinfe/extension-library-importer/blob/main/docs/importing.md",
   "source": "https://github.com/vpinfe/extension-library-importer",
   "picture": "logo.png",
   "requires_platform": 1,
